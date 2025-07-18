@@ -2,14 +2,15 @@
 
 set -euo pipefail
 
-# General arguments
 ROOT=$PWD
+
+GENRL_TAG="v0.1.1"
 
 export IDENTITY_PATH
 export GENSYN_RESET_CONFIG
 export CONNECT_TO_TESTNET=true
 export ORG_ID
-export HF_HUB_DOWNLOAD_TIMEOUT=120  # 2 minutes
+export HF_HUB_DOWNLOAD_TIMEOUT=120
 export SWARM_CONTRACT="0xFaD7C5e93f28257429569B854151A1B8DCD404c2"
 export HUGGINGFACE_ACCESS_TOKEN="None"
 
@@ -19,7 +20,6 @@ IDENTITY_PATH=${IDENTITY_PATH:-$DEFAULT_IDENTITY_PATH}
 DOCKER=${DOCKER:-""}
 GENSYN_RESET_CONFIG=${GENSYN_RESET_CONFIG:-""}
 
-# Docker permission workaround
 if [ -n "$DOCKER" ]; then
     volumes=(
         /home/gensyn/rl_swarm/modal-login/temp-data
@@ -27,6 +27,7 @@ if [ -n "$DOCKER" ]; then
         /home/gensyn/rl_swarm/configs
         /home/gensyn/rl_swarm/logs
     )
+
     for volume in ${volumes[@]}; do
         sudo chown -R 1001:1001 $volume
     done
@@ -35,7 +36,6 @@ fi
 CPU_ONLY=${CPU_ONLY:-""}
 ORG_ID=${ORG_ID:-""}
 
-# Color definitions
 GREEN_TEXT="\033[32m"
 BLUE_TEXT="\033[34m"
 RED_TEXT="\033[31m"
@@ -53,10 +53,15 @@ echo_red() {
     echo -e "$RED_TEXT$1$RESET_TEXT"
 }
 
-# Function to clean up background processes upon exit
+ROOT_DIR="$(cd $(dirname ${BASH_SOURCE[0]}) && pwd)"
+
 cleanup() {
-    echo_green ">> Shutting down..."
+    echo_green ">> Shutting down trainer..."
+
+    rm -r $ROOT_DIR/modal-login/temp-data/*.json 2> /dev/null || true
+
     kill -- -$$ || true
+
     exit 0
 }
 
@@ -69,11 +74,11 @@ trap errnotify ERR
 
 echo -e "\033[38;5;224m"
 cat << "EOF"
-    ██████  ██              ███████ ██      ██  █████  ██████  ███    ███
-    ██   ██ ██              ██      ██      ██ ██   ██ ██   ██ ████  ████
-    ██████  ██        █████ ███████ ██  █   ██ ███████ ██████  ██ ████ ██
-    ██   ██ ██                    ██ ██ ███ ██ ██   ██ ██   ██ ██  ██  ██
-    ██   ██ ███████         ███████  ███ ███  ██   ██ ██   ██ ██      ██
+    ██████  ██            ███████ ██     ██  █████  ██████  ███    ███
+    ██   ██ ██            ██      ██     ██ ██   ██ ██   ██ ████  ████
+    ██████  ██      █████ ███████ ██  █  ██ ███████ ██████  ██ ████ ██
+    ██   ██ ██                 ██ ██ ███ ██ ██   ██ ██   ██ ██  ██  ██
+    ██   ██ ███████       ███████  ███ ███  ██   ██ ██   ██ ██      ██
 
     From Gensyn
 
@@ -81,67 +86,121 @@ EOF
 
 mkdir -p "$ROOT/logs"
 
-# Login and Proxy Server Logic
 if [ "$CONNECT_TO_TESTNET" = true ]; then
-    echo_green ">> Preparing Modal Proxy server..."
+    echo "Please login to create an Ethereum Server Wallet"
     cd modal-login
-    
-    # Install dependencies if they are missing
+
     if ! command -v node > /dev/null 2>&1; then
         echo "Node.js not found. Installing NVM and latest Node.js..."
-        export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        export NVM_DIR="$HOME/.nvm"
+        if [ ! -d "$NVM_DIR" ]; then
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+        fi
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
         nvm install node
+    else
+        echo "Node.js is already installed: $(node -v)"
     fi
+
     if ! command -v yarn > /dev/null 2>&1; then
-        echo "Yarn not found. Installing..."
-        npm install -g yarn
+        if grep -qi "ubuntu" /etc/os-release 2> /dev/null || uname -r | grep -qi "microsoft"; then
+            echo "Detected Ubuntu or WSL Ubuntu. Installing Yarn via apt..."
+            curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+            echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+            sudo apt update && sudo apt install -y yarn
+        else
+            echo "Yarn not found. Installing Yarn globally with npm (no profile edits)…"
+            npm install -g --silent yarn
+        fi
     fi
+
+    ENV_FILE="$ROOT"/modal-login/.env
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "3s/.*/SMART_CONTRACT_ADDRESS=$SWARM_CONTRACT/" "$ENV_FILE"
+    else
+        sed -i "3s/.*/SMART_CONTRACT_ADDRESS=$SWARM_CONTRACT/" "$ENV_FILE"
+    fi
+
     if [ -z "$DOCKER" ]; then
-            yarn install --immutable
-            yarn build > "$ROOT/logs/yarn.log" 2>&1
+        yarn install --immutable
+        echo "Building server"
+        yarn build > "$ROOT/logs/yarn.log" 2>&1
     fi
-    
-    # Always start the server in the background to fix "Connection refused" error.
-    echo_green ">> Starting Modal Proxy server in the background..."
     yarn start >> "$ROOT/logs/yarn.log" 2>&1 &
+
     SERVER_PID=$!
     echo "Started server process: $SERVER_PID"
-    cd ..
-    sleep 5 # Give server a moment to start up
+    sleep 5
 
-    # Check for existing credentials or guide user through login
-    if [ -f "modal-login/temp-data/userData.json" ]; then
-        echo_green ">> Found existing login credentials."
-        ORG_ID=$(awk 'BEGIN { FS = "\"" } !/^[ \t]*[{}]/ { print $(NF - 1); exit }' modal-login/temp-data/userData.json)
+    if [ ! -f "$ROOT/modal-login/temp-data/userData.json" ]; then
+        echo_green ">> userData.json not found. Starting tunnel..."
+
+        if ! command -v lt > /dev/null 2>&1; then
+            echo "Installing localtunnel..."
+            npm install -g localtunnel
+        fi
+
+        echo_green ">> Starting localtunnel for port 3000..."
+        lt --port 3000 &
+        LT_PID=$!
+
+        SERVER_IP=$(hostname -I | awk '{print $1}')
+        echo "Server IP: $SERVER_IP"
+
+        sleep 3
+
+        echo "Your tunnel is running! Use the link printed above to visit the website."
+        echo "If prompted for a password, use your VPS IP."
     else
-        echo_green ">> Please log in via your browser at http://localhost:3000"
-        while [ ! -f "modal-login/temp-data/userData.json" ]; do
-            sleep 5
-        done
-        echo "Found userData.json. Proceeding..."
-        ORG_ID=$(awk 'BEGIN { FS = "\"" } !/^[ \t]*[{}]/ { print $(NF - 1); exit }' modal-login/temp-data/userData.json)
-        
-        while true; do
-            STATUS=$(curl -s "http://localhost:3000/api/get-api-key-status?orgId=$ORG_ID")
-            if [[ "$STATUS" == "activated" ]]; then
-                echo "API key is activated! Proceeding..."
-                break
-            else
-                sleep 5
-            fi
-        done
+        echo_green ">> User data found. Skipping localtunnel."
     fi
+
+    cd ..
+
+    echo_green ">> Waiting for modal userData.json to be created..."
+    while [ ! -f "modal-login/temp-data/userData.json" ]; do
+        sleep 5
+    done
+    echo "Found userData.json. Proceeding..."
+
+    ORG_ID=$(awk 'BEGIN { FS = "\"" } !/^[ \t]*[{}]/ { print $(NF - 1); exit }' modal-login/temp-data/userData.json)
     echo "Your ORG_ID is set to: $ORG_ID"
+
+    if [ -n "${LT_PID:-}" ]; then
+        kill "$LT_PID" || true
+        echo_green ">> Localtunnel has been closed."
+    fi
+
+    echo "Waiting for API key to become activated..."
+    while true; do
+        STATUS=$(curl -s "http://localhost:3000/api/get-api-key-status?orgId=$ORG_ID")
+        if [[ "$STATUS" == "activated" ]]; then
+            echo "API key is activated! Proceeding..."
+            break
+        else
+            echo "Waiting for API key to be activated..."
+            sleep 5
+        fi
+    done
 fi
 
-echo_green ">> Installing Python requirements..."
+echo_green ">> Getting requirements..."
 pip install --upgrade pip
-pip install git+https://github.com/xailong-6969/genrl-swarm
+
+pip install git+https://github.com/abz-coder/genrl-optimized
 pip install reasoning-gym>=0.1.20
 pip install trl
 pip install vllm==0.7.3
 pip install bitsandbytes 
 pip install hivemind@git+https://github.com/gensyn-ai/hivemind@639c964a8019de63135a2594663b5bec8e5356dd
+
+USE_CPU=${USE_CPU:-""}
+
+if [[ "$USE_CPU" =~ ^(CPU|cpu|true|1)$ ]]; then
+    echo_green ">> USE_CPU=$USE_CPU detected. Adjusting config for CPU mode..."
+    sed -i -E 's/fp16: false/fp16: true/; s/num_train_samples: 2/num_train_samples: 1/' "$ROOT/rgym_exp/config/rg-swarm.yaml"
+fi
 
 # Copy default config if needed
 if [ ! -d "$ROOT/configs" ]; then
@@ -153,26 +212,24 @@ fi
 
 echo_green ">> Setup complete!"
 
-# Handle Hugging Face token
-HF_TOKEN=${HF_TOKEN:-""}
-if [ -z "${HF_TOKEN}" ]; then
-    echo -en $GREEN_TEXT
-    read -p ">> Would you like to push models to the Hugging Face Hub? [y/N] " yn
-    echo -en $RESET_TEXT
-    case ${yn:-N} in
-        [Yy]*) read -p "Enter your Hugging Face access token: " HUGGINGFACE_ACCESS_TOKEN ;;
-        *) HUGGINGFACE_ACCESS_TOKEN="None" ;;
-    esac
-else
-    HUGGINGFACE_ACCESS_TOKEN=${HF_TOKEN}
+if [ -n "$DOCKER" ]; then
+    sudo chmod -R 0777 /home/gensyn/rl_swarm/configs
 fi
 
-# ✅ KEY FIX: Restored the interactive prompt for model selection as requested.
-echo -en $GREEN_TEXT
-read -p ">> Enter the name of the model you want to use in huggingface repo/name format, or press [Enter] to use the default model. " MODEL_NAME
-echo -en $RESET_TEXT
+echo_green ">> Done!"
 
-# Only export MODEL_NAME if user provided a non-empty value
+HF_TOKEN=${HF_TOKEN:-""}
+if [ -n "${HF_TOKEN}" ]; then
+    HUGGINGFACE_ACCESS_TOKEN=${HF_TOKEN}
+else
+    yn="N"
+    HUGGINGFACE_ACCESS_TOKEN="None"
+    echo_green ">> Automatically set: NO models will be pushed to Hugging Face Hub"
+fi
+
+MODEL_NAME="Gensyn/Qwen2.5-0.5B-Instruct"
+echo_green ">> Automatically set model: $MODEL_NAME"
+
 if [ -n "$MODEL_NAME" ]; then
     export MODEL_NAME
     echo_green ">> Using model: $MODEL_NAME"
@@ -187,4 +244,4 @@ python -m rgym_exp.runner.swarm_launcher \
     --config-path "$ROOT/rgym_exp/config" \
     --config-name "rg-swarm.yaml" 
 
-wait # Keep script running until Ctrl+C
+wait
