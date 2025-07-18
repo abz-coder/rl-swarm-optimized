@@ -5,7 +5,7 @@ log_dir: ${oc.env:ROOT,.}/logs
 training:
   # Set to 'false' to enable training mode.
   # Set to 'true' for fast inference-only mode using vLLM.
-  use_vllm: true
+  use_vllm: false
 
   # Set to 'true' to enable mixed-precision training.
   # The python code is configured to use stable 'bfloat16' on compatible GPUs.
