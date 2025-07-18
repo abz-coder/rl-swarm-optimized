@@ -227,7 +227,7 @@ else
     echo_green ">> Automatically set: NO models will be pushed to Hugging Face Hub"
 fi
 
-MODEL_NAME="Gensyn/Qwen2.5-0.5B-Instruct"
+MODEL_NAME="dnotitia/Smoothie-Qwen3-1.7B"
 echo_green ">> Automatically set model: $MODEL_NAME"
 
 if [ -n "$MODEL_NAME" ]; then
