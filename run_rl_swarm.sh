@@ -193,6 +193,10 @@ pip install vllm==0.7.3
 pip install bitsandbytes 
 pip install hivemind@git+https://github.com/gensyn-ai/hivemind@639c964a8019de63135a2594663b5bec8e5356dd
 
+if [ ! -d "$ROOT/configs" ]; then
+    mkdir "$ROOT/configs"
+fi
+
 USE_VLLM=${USE_VLLM:-"y"}
 
 if [[ "$USE_VLLM" =~ ^(y|Y|yes|YES)$ ]]; then
