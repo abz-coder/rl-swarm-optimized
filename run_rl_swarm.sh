@@ -193,19 +193,14 @@ pip install vllm==0.7.3
 pip install bitsandbytes 
 pip install hivemind@git+https://github.com/gensyn-ai/hivemind@639c964a8019de63135a2594663b5bec8e5356dd
 
-USE_CPU=${USE_CPU:-""}
+USE_VLLM=${USE_VLLM:-"y"}
 
-if [[ "$USE_CPU" =~ ^(CPU|cpu|true|1)$ ]]; then
-    echo_green ">> USE_CPU=$USE_CPU detected. Adjusting config for CPU mode..."
-    sed -i -E 's/fp16: false/fp16: true/; s/num_train_samples: 2/num_train_samples: 1/' "$ROOT/rgym_exp/config/rg-swarm.yaml"
-fi
-
-# Copy default config if needed
-if [ ! -d "$ROOT/configs" ]; then
-    mkdir "$ROOT/configs"
-fi
-if [ ! -f "$ROOT/configs/rg-swarm.yaml" ]; then
+if [[ "$USE_VLLM" =~ ^(y|Y|yes|YES)$ ]]; then
+    echo_green ">> USE_VLLM=$USE_VLLM detected. Using VLLM config..."
     cp "$ROOT/rgym_exp/config/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml"
+else
+    echo_green ">> USE_VLLM=$USE_VLLM detected. Using non-VLLM config..."
+    cp "$ROOT/rgym_exp/config/rg-swarm-no-vllm.yaml" "$ROOT/configs/rg-swarm.yaml"
 fi
 
 echo_green ">> Setup complete!"
